@@ -12,6 +12,11 @@ type UpdateProxyConfig struct {
 	UpstreamUrl string `yaml:"upstream" env:"UPSTREAM" env-default:"https://api.openshift.com"`
 	Insecure    bool   `yaml:"insecure" env:"INSECURE" env-default:"false"`
 
+	Metrics struct {
+		Enabled bool   `yaml:"enabled" env-default:"true"`
+		Listen  string `yaml:"listen" env-default:"0.0.0.0:9090"`
+	} `yaml:"metrics"`
+
 	Health struct {
 		Enabled          bool          `yaml:"enabled" env:"HEALTH_ENABLED" env-default:"true"`
 		Path             string        `yaml:"path" env-default:"/health"`

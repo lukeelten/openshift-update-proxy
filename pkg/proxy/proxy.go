@@ -24,6 +24,7 @@ type OpenShiftUpdateProxy struct {
 	Cache  *cache.ResponseCache
 
 	Healthchecks *cache.HealthCheckCache
+	Metrics      *UpdateProxyMetrics
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
@@ -36,6 +37,7 @@ func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredL
 		Server: http.Server{
 			Addr: cfg.Listen,
 		},
+		Metrics: NewUpdateProxyMetrics(cfg),
 	}
 
 	if cfg.Insecure {
@@ -67,6 +69,20 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 		})
 	}
 
+	if proxy.Config.Metrics.Enabled {
+		// Start metrics server
+		group.Go(func() error {
+			proxy.Logger.Infow("starting metrics server", "address", proxy.Config.Metrics.Listen)
+			return proxy.Metrics.Run()
+		})
+
+		// Stop metrics server
+		group.Go(func() error {
+			<-ctx.Done()
+			return proxy.Metrics.Shutdown()
+		})
+	}
+
 	group.Go(func() error {
 		proxy.Logger.Infow("Start listening", "address", proxy.Config.Listen)
 		return proxy.Server.ListenAndServe()
@@ -87,6 +103,7 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 func (proxy *OpenShiftUpdateProxy) healthCheck(response http.ResponseWriter, req *http.Request) {
 	status := proxy.Healthchecks.Alive()
 	proxy.Logger.Debugw("got healthcheck", "status", status)
+	proxy.Metrics.Healthcheck(status)
 
 	if status {
 		response.WriteHeader(http.StatusOK)
@@ -118,6 +135,9 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 	}
 
 	proxy.Logger.Infow("Handling request", "path", req.URL.Path, "params", req.URL.RawQuery)
+
+	query := req.URL.Query()
+	proxy.Metrics.UpdateInfo(query.Get(QUERY_PARAM_ARCH), query.Get(QUERY_PARAM_CHANNEL), query.Get(QUERY_PARAM_VERSION))
 
 	upstreamUrl, err := proxy.buildUpstreamURL(req.URL)
 	if err != nil {
