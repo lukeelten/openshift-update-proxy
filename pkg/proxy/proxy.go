@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
 	"go.uber.org/zap"
@@ -21,17 +22,30 @@ type OpenShiftUpdateProxy struct {
 	Client http.Client
 	Server http.Server
 	Cache  *cache.ResponseCache
+
+	Healthchecks *cache.HealthCheckCache
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
 	proxy := OpenShiftUpdateProxy{
-		Config: cfg,
-		Logger: logger,
-		Cache:  cache.NewResponseCache(cfg.DefaultTTL),
-		Client: http.Client{},
+		Config:       cfg,
+		Logger:       logger,
+		Cache:        cache.NewResponseCache(cfg.DefaultTTL),
+		Healthchecks: cache.NewHealthCheckCache(cfg, logger),
+		Client:       http.Client{},
 		Server: http.Server{
 			Addr: cfg.Listen,
 		},
+	}
+
+	if cfg.Insecure {
+		tlsConfig := tls.Config{
+			InsecureSkipVerify: true,
+		}
+		transport := http.Transport{
+			TLSClientConfig: &tlsConfig,
+		}
+		proxy.Client.Transport = &transport
 	}
 
 	proxy.Server.Handler = http.HandlerFunc(proxy.ServeHTTP)
@@ -44,6 +58,13 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 
 	proxy.Server.BaseContext = func(listener net.Listener) context.Context {
 		return ctx
+	}
+
+	if proxy.Config.Health.Enabled {
+		// Start healthcheck controller
+		group.Go(func() error {
+			return proxy.Healthchecks.Run(ctx)
+		})
 	}
 
 	group.Go(func() error {
@@ -64,7 +85,15 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 }
 
 func (proxy *OpenShiftUpdateProxy) healthCheck(response http.ResponseWriter, req *http.Request) {
+	status := proxy.Healthchecks.Alive()
+	proxy.Logger.Debugw("got healthcheck", "status", status)
 
+	if status {
+		response.WriteHeader(http.StatusOK)
+		return
+	}
+
+	response.WriteHeader(http.StatusInternalServerError)
 }
 
 func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *http.Request) {
@@ -81,7 +110,9 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 		return
 	}
 
-	if strings.Contains(req.URL.Path, "health") {
+	path := strings.TrimPrefix(req.URL.Path, "/")
+	healthPath := strings.TrimPrefix(proxy.Config.Health.Path, "/")
+	if strings.HasPrefix(path, healthPath) {
 		proxy.healthCheck(response, req)
 		return
 	}

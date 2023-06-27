@@ -10,4 +10,16 @@ type UpdateProxyConfig struct {
 	HideClusterId bool          `yaml:"hideClusterId" env:"HIDE_CLUSTER_ID" env-default:"true"`
 
 	UpstreamUrl string `yaml:"upstream" env:"UPSTREAM" env-default:"https://api.openshift.com"`
+	Insecure    bool   `yaml:"insecure" env:"INSECURE" env-default:"false"`
+
+	Health struct {
+		Enabled          bool
+		Path             string
+		Url              string
+		Insecure         bool
+		Interval         time.Duration
+		FailureThreshold int
+		Timeout          time.Duration
+		RetryInterval    time.Duration
+	}
 }
