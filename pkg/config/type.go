@@ -13,13 +13,13 @@ type UpdateProxyConfig struct {
 	Insecure    bool   `yaml:"insecure" env:"INSECURE" env-default:"false"`
 
 	Health struct {
-		Enabled          bool
-		Path             string
-		Url              string
-		Insecure         bool
-		Interval         time.Duration
-		FailureThreshold int
-		Timeout          time.Duration
-		RetryInterval    time.Duration
-	}
+		Enabled          bool          `yaml:"enabled" env:"HEALTH_ENABLED" env-default:"true"`
+		Path             string        `yaml:"path" env-default:"/health"`
+		Url              string        `yaml:"url" env-default:""`
+		Insecure         bool          `yaml:"insecure" env-default:"false"`
+		Interval         time.Duration `yaml:"interval" env-default:"5m"`
+		FailureThreshold int           `yaml:"failureThreshold" env-default:"3"`
+		Timeout          time.Duration `yaml:"timeout" emv-default:"5s"`
+		RetryInterval    time.Duration `yaml:"retryInterval" env-default:"30s"`
+	} `yaml:"health"`
 }

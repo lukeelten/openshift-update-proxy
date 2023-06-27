@@ -54,7 +54,12 @@ func (cache *HealthCheckCache) refresh() error {
 	cache.lock.Lock()
 	defer cache.lock.Unlock()
 
-	res, err := cache.Client.Get(cache.Config.Health.Url)
+	url := cache.Config.Health.Url
+	if len(url) == 0 {
+		url = cache.Config.UpstreamUrl
+	}
+
+	res, err := cache.Client.Get(url)
 	if err != nil {
 		cache.Logger.Debugw("got invalid response", "err", err, "response", res)
 		return err
