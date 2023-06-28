@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
+	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"net"
@@ -21,23 +22,24 @@ type OpenShiftUpdateProxy struct {
 
 	Client http.Client
 	Server http.Server
-	Cache  *cache.ResponseCache
+	Cache  *cache.OpenShiftVersionCache
 
 	Healthchecks *cache.HealthCheckCache
-	Metrics      *UpdateProxyMetrics
+	Metrics      *metrics.UpdateProxyMetrics
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
+	m := metrics.NewUpdateProxyMetrics(cfg)
 	proxy := OpenShiftUpdateProxy{
 		Config:       cfg,
 		Logger:       logger,
-		Cache:        cache.NewResponseCache(cfg.DefaultTTL),
+		Cache:        cache.NewOpenShiftVersionCache(cfg, logger, m),
 		Healthchecks: cache.NewHealthCheckCache(cfg, logger),
 		Client:       http.Client{},
 		Server: http.Server{
 			Addr: cfg.Listen,
 		},
-		Metrics: NewUpdateProxyMetrics(cfg),
+		Metrics: m,
 	}
 
 	if cfg.Insecure {
@@ -82,6 +84,11 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 			return proxy.Metrics.Shutdown()
 		})
 	}
+
+	// Run cache garbage collector
+	group.Go(func() error {
+		return proxy.Cache.RunGarbageCollector(ctx)
+	})
 
 	group.Go(func() error {
 		proxy.Logger.Infow("Start listening", "address", proxy.Config.Listen)
@@ -137,7 +144,12 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 	proxy.Logger.Infow("Handling request", "path", req.URL.Path, "params", req.URL.RawQuery)
 
 	query := req.URL.Query()
-	proxy.Metrics.UpdateInfo(query.Get(QUERY_PARAM_ARCH), query.Get(QUERY_PARAM_CHANNEL), query.Get(QUERY_PARAM_VERSION))
+	requestKey := cache.VersionKey{
+		Arch:    query.Get(QUERY_PARAM_ARCH),
+		Channel: query.Get(QUERY_PARAM_CHANNEL),
+		Version: query.Get(QUERY_PARAM_VERSION),
+	}
+	proxy.Metrics.UpdateInfo(requestKey.Arch, requestKey.Channel, requestKey.Version)
 
 	upstreamUrl, err := proxy.buildUpstreamURL(req.URL)
 	if err != nil {
@@ -147,8 +159,11 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 		return
 	}
 
-	body, err := proxy.Cache.GetOrCompute(upstreamUrl, func() ([]byte, error) {
-		return proxy.loadUpstream(upstreamUrl)
+	body, err := proxy.Cache.GetOrCompute(requestKey, func() ([]byte, error) {
+		startTime := time.Now()
+		body, err := proxy.loadUpstream(upstreamUrl)
+		proxy.Metrics.UpstreamResponseTime(requestKey.Arch, requestKey.Channel, requestKey.Version, time.Since(startTime))
+		return body, err
 	})
 	if err != nil {
 		proxy.Logger.Error("error requesting upstream body")

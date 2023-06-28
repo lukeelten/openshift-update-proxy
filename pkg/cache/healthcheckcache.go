@@ -33,6 +33,11 @@ func NewHealthCheckCache(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogge
 		},
 	}
 
+	if len(cfg.Health.Url) == 0 {
+		cfg.Health.Url = cfg.UpstreamUrl
+		cfg.Health.Insecure = cfg.Insecure
+	}
+
 	if cfg.Health.Insecure {
 		tlsConfig := tls.Config{
 			InsecureSkipVerify: true,
@@ -55,10 +60,6 @@ func (cache *HealthCheckCache) refresh() error {
 	defer cache.lock.Unlock()
 
 	url := cache.Config.Health.Url
-	if len(url) == 0 {
-		url = cache.Config.UpstreamUrl
-	}
-
 	res, err := cache.Client.Get(url)
 	if err != nil {
 		cache.Logger.Debugw("got invalid response", "err", err, "response", res)
