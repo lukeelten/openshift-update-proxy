@@ -29,9 +29,9 @@ func (con *CleanupController) Run(ctx context.Context) error {
 	for {
 		now := time.Now()
 		num := con.Cache.DeleteAll(func(entry *cache.VersionEntry) bool {
-			evictionThreshold := entry.LastAccessed.Add(con.Config.Cache.EvictAfter)
-			return evictionThreshold.After(now)
+			return entry.LastAccessed.Add(con.Config.Cache.EvictAfter).Before(now)
 		})
+
 		con.Logger.Debugw("Deleted entries", "num", num)
 		if num > 0 {
 			con.Logger.Infow("Deleted entries from cache", "entries", num)

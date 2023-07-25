@@ -21,9 +21,6 @@ type VersionEntry struct {
 	ValidUntil   time.Time
 }
 
-// TODO: Accesssed und refresh error über metric vectors
-// refresh counter
-
 func (entry VersionEntry) Key() string {
 	return makeKey(entry.Arch, entry.Channel, entry.Version)
 }

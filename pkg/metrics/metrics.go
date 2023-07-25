@@ -7,69 +7,51 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"net/http"
-	"strconv"
 	"time"
 )
 
 type UpdateProxyMetrics struct {
-	updateInfo   *prometheus.CounterVec
-	healthchecks *prometheus.CounterVec
-	cacheMiss    *prometheus.CounterVec
-	cacheHit     *prometheus.CounterVec
-	cacheEntries prometheus.Gauge
-
-	upstreamResponseTime       *prometheus.HistogramVec
-	cacheGarbageCollectionTime prometheus.Histogram
-
-	Config *config.UpdateProxyConfig
 	Server http.Server
+
+	MetricCacheHit  *prometheus.CounterVec
+	MetricCacheMiss *prometheus.CounterVec
+	CacheSize       *prometheus.GaugeVec
+	VersionAccessed *prometheus.CounterVec
+	Healthcheck     prometheus.Counter
+
+	UpstreamResponseTime *prometheus.HistogramVec
+	ResponseTime         *prometheus.HistogramVec
+	ErrorResponses       *prometheus.CounterVec
+
+	RefreshCounter *prometheus.CounterVec
+	RefreshErrors  *prometheus.CounterVec
 }
+
+const METRIC_NAMESPACE = "openshift_update_proxy"
 
 func NewUpdateProxyMetrics(cfg *config.UpdateProxyConfig) *UpdateProxyMetrics {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 
 	return &UpdateProxyMetrics{
-		updateInfo:                 promauto.NewCounterVec(prometheus.CounterOpts{Name: "openshift_update_proxy_cluster_infos"}, []string{"arch", "channel", "version"}),
-		cacheMiss:                  promauto.NewCounterVec(prometheus.CounterOpts{Name: "openshift_update_proxy_cache_miss"}, []string{"arch", "channel", "version"}),
-		cacheHit:                   promauto.NewCounterVec(prometheus.CounterOpts{Name: "openshift_update_proxy_cache_hit"}, []string{"arch", "channel", "version"}),
-		upstreamResponseTime:       promauto.NewHistogramVec(prometheus.HistogramOpts{Name: "openshift_update_proxy_upstream_response_time_ms"}, []string{"arch", "channel", "version"}),
-		healthchecks:               promauto.NewCounterVec(prometheus.CounterOpts{Name: "openshift_update_proxy_healthchecks"}, []string{"status"}),
-		cacheEntries:               promauto.NewGauge(prometheus.GaugeOpts{Name: "openshift_update_proxy_cache_entries"}),
-		cacheGarbageCollectionTime: promauto.NewHistogram(prometheus.HistogramOpts{Name: "openshift_update_proxy_cache_garbage_collection_time_ms"}),
+		MetricCacheMiss: promauto.NewCounterVec(counter("cache", "miss"), []string{"product"}),
+		MetricCacheHit:  promauto.NewCounterVec(counter("cache", "hit"), []string{"product"}),
+		CacheSize:       promauto.NewGaugeVec(gauge("cache", "size"), []string{"product"}),
+		VersionAccessed: promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
+		Healthcheck:     promauto.NewCounter(counter("healthcheck", "requests")),
+
+		UpstreamResponseTime: promauto.NewHistogramVec(histogram("upstream", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
+		ResponseTime:         promauto.NewHistogramVec(histogram("version", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
+
+		ErrorResponses: promauto.NewCounterVec(counter("response", "errors"), []string{"code"}),
+		RefreshCounter: promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
+		RefreshErrors:  promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
+
 		Server: http.Server{
 			Handler: mux,
 			Addr:    cfg.Metrics.Listen,
 		},
 	}
-}
-
-func (metrics *UpdateProxyMetrics) CacheGarbageCollectionTime(runtime time.Duration) {
-	metrics.cacheGarbageCollectionTime.Observe(float64(runtime.Milliseconds()))
-}
-
-func (metrics *UpdateProxyMetrics) UpstreamResponseTime(arch, channel, version string, runtime time.Duration) {
-	metrics.upstreamResponseTime.WithLabelValues(arch, channel, version).Observe(float64(runtime.Milliseconds()))
-}
-
-func (metrics *UpdateProxyMetrics) CacheHit(arch, channel, version string) {
-	metrics.cacheHit.WithLabelValues(arch, channel, version).Inc()
-}
-
-func (metrics *UpdateProxyMetrics) CacheMiss(arch, channel, version string) {
-	metrics.cacheMiss.WithLabelValues(arch, channel, version).Inc()
-}
-
-func (metrics *UpdateProxyMetrics) CacheEntries(length int) {
-	metrics.cacheEntries.Set(float64(length))
-}
-
-func (metrics *UpdateProxyMetrics) UpdateInfo(arch, channel, version string) {
-	metrics.updateInfo.WithLabelValues(arch, channel, version).Inc()
-}
-
-func (metrics *UpdateProxyMetrics) Healthcheck() {
-	metrics.healthchecks.WithLabelValues(strconv.FormatBool(true)).Inc()
 }
 
 func (metrics *UpdateProxyMetrics) Run() error {

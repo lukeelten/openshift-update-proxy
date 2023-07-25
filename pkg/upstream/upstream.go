@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
+	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -12,14 +13,16 @@ import (
 )
 
 type UpstreamClient struct {
-	Logger *zap.SugaredLogger
+	Logger  *zap.SugaredLogger
+	Metrics *metrics.UpdateProxyMetrics
+	Product string
 
 	Client http.Client
 
 	Endpoint string
 }
 
-func NewUpstreamClient(logger *zap.SugaredLogger, endpoint string, insecure bool, timeout time.Duration) *UpstreamClient {
+func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, product string, endpoint string, insecure bool, timeout time.Duration) *UpstreamClient {
 	client := http.Client{
 		Timeout: timeout,
 	}
@@ -35,12 +38,16 @@ func NewUpstreamClient(logger *zap.SugaredLogger, endpoint string, insecure bool
 
 	return &UpstreamClient{
 		Logger:   logger,
+		Metrics:  metric,
 		Client:   client,
+		Product:  product,
 		Endpoint: endpoint,
 	}
 }
 
 func (client *UpstreamClient) LoadVersionInfo(arch, channel, version string) ([]byte, error) {
+	startTime := time.Now()
+
 	finalUrl, err := client.buildURL(arch, channel, version)
 	if err != nil {
 		client.Logger.Debugw("cannot build upstream url", "endpoint", client.Endpoint, "error", err)
@@ -74,6 +81,8 @@ func (client *UpstreamClient) LoadVersionInfo(arch, channel, version string) ([]
 		return []byte{}, err
 	}
 
+	elapsed := time.Until(startTime)
+	client.Metrics.UpstreamResponseTime.WithLabelValues(client.Product, arch, channel, version).Observe(float64(elapsed.Microseconds()))
 	return body, nil
 }
 

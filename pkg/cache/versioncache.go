@@ -12,25 +12,38 @@ type FilterFunc func(entry *VersionEntry) bool
 type ForeachFunc func(entry *VersionEntry)
 
 type OpenShiftVersionCache struct {
-	Config  *config.UpdateProxyConfig
-	Logger  *zap.SugaredLogger
+	Config *config.UpdateProxyConfig
+	Logger *zap.SugaredLogger
+
+	product string
 	Metrics *metrics.UpdateProxyMetrics
 
 	lock  sync.Mutex
 	cache map[string]*VersionEntry
 }
 
-func NewOpenShiftVersionCache(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics) *OpenShiftVersionCache {
+func NewOpenShiftVersionCache(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, product string) *OpenShiftVersionCache {
+	metric.CacheSize.WithLabelValues(product).Set(0)
 	return &OpenShiftVersionCache{
 		Config:  cfg,
 		Logger:  logger,
+		product: product,
 		Metrics: metric,
-		lock:    sync.Mutex{},
-		cache:   make(map[string]*VersionEntry),
+
+		lock:  sync.Mutex{},
+		cache: make(map[string]*VersionEntry),
 	}
 }
 
+func (cache *OpenShiftVersionCache) updateCacheMetric() {
+	size := len(cache.cache)
+	cache.Metrics.CacheSize.WithLabelValues(cache.product).Set(float64(size))
+}
+
 func (cache *OpenShiftVersionCache) Get(arch, channel, version string) ([]byte, error) {
+	cache.updateCacheMetric()
+	cache.Metrics.VersionAccessed.WithLabelValues(cache.product, arch, channel, version).Inc()
+
 	key := makeKey(arch, channel, version)
 	cache.Logger.Debugw("load cache entry", "key", key)
 
@@ -39,11 +52,12 @@ func (cache *OpenShiftVersionCache) Get(arch, channel, version string) ([]byte, 
 
 	entry, ok := cache.cache[key]
 	if ok {
-		// Todo: log access
+		cache.Metrics.MetricCacheHit.WithLabelValues(cache.product).Inc()
 		entry.LastAccessed = time.Now()
 		return entry.Body, nil
 	}
 
+	cache.Metrics.MetricCacheMiss.WithLabelValues(cache.product).Inc()
 	return []byte{}, ERR_NOT_FOUND
 }
 
@@ -63,6 +77,8 @@ func (cache *OpenShiftVersionCache) Set(arch, channel, version string, body []by
 	defer cache.lock.Unlock()
 
 	cache.cache[key] = &entry
+
+	cache.updateCacheMetric()
 }
 
 func (cache *OpenShiftVersionCache) Delete(arch, channel, version string) {
@@ -71,9 +87,13 @@ func (cache *OpenShiftVersionCache) Delete(arch, channel, version string) {
 	defer cache.lock.Unlock()
 
 	delete(cache.cache, key)
+
+	cache.updateCacheMetric()
 }
 
 func (cache *OpenShiftVersionCache) Foreach(foreachFunc ForeachFunc) {
+	cache.updateCacheMetric()
+
 	cache.lock.Lock()
 	defer cache.lock.Unlock()
 
@@ -83,19 +103,20 @@ func (cache *OpenShiftVersionCache) Foreach(foreachFunc ForeachFunc) {
 }
 
 func (cache *OpenShiftVersionCache) DeleteAll(filterFunc FilterFunc) int {
-	result := make([]*VersionEntry, 0)
+	result := make([]string, 0)
 	cache.lock.Lock()
 	defer cache.lock.Unlock()
 
 	for _, entry := range cache.cache {
 		if filterFunc(entry) {
-			result = append(result, entry)
+			result = append(result, entry.Key())
 		}
 	}
 
 	for _, entry := range result {
-		delete(cache.cache, entry.Key())
+		delete(cache.cache, entry)
 	}
 
+	cache.updateCacheMetric()
 	return len(result)
 }

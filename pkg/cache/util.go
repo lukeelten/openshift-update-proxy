@@ -8,8 +8,7 @@ import (
 )
 
 var (
-	ERR_NOT_FOUND = errors.New("cannot find entry in response cache")
-	ERR_EXPIRED   = errors.New("entry expired")
+	ERR_NOT_FOUND = errors.New("cannot find entry in cache")
 )
 
 func hash(key string) string {
