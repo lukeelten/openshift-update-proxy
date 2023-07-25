@@ -3,7 +3,7 @@ package config
 import "time"
 
 type UpdateProxyConfig struct {
-	Debug bool `yaml:"debug" env:"DEBUG" env-default:"true"`
+	Debug bool `yaml:"debug" env:"DEBUG" env-default:"false"`
 
 	Listen string `yaml:"listen" env:"HTTP_LISTEN" env-default:"0.0.0.0:8080"`
 
@@ -22,9 +22,9 @@ type UpdateProxyConfig struct {
 	} `yaml:"ocp"`
 
 	Cache struct {
-		DefaultLifetime time.Duration `yaml:"defaultLifetime" env:"CACHE_DEFAULT_TTL" env-default:"12h"`
+		DefaultLifetime time.Duration `yaml:"defaultLifetime" env:"CACHE_DEFAULT_TTL" env-default:"8h"`
 		EvictAfter      time.Duration `yaml:"evictAfter" env:"CACHE_EVICT_AFTER" env-default:"168h"`
-		ControllerCycle time.Duration `yaml:"controllerCycle" env-default:"10s"`
+		ControllerCycle time.Duration `yaml:"controllerCycle" env-default:"5m"`
 	} `yaml:"cache"`
 
 	Metrics struct {
