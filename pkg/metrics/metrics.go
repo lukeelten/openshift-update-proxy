@@ -68,8 +68,8 @@ func (metrics *UpdateProxyMetrics) UpdateInfo(arch, channel, version string) {
 	metrics.updateInfo.WithLabelValues(arch, channel, version).Inc()
 }
 
-func (metrics *UpdateProxyMetrics) Healthcheck(status bool) {
-	metrics.healthchecks.WithLabelValues(strconv.FormatBool(status)).Inc()
+func (metrics *UpdateProxyMetrics) Healthcheck() {
+	metrics.healthchecks.WithLabelValues(strconv.FormatBool(true)).Inc()
 }
 
 func (metrics *UpdateProxyMetrics) Run() error {

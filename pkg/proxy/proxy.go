@@ -2,10 +2,11 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
+	"github.com/lukeelten/openshift-update-proxy/pkg/controller"
 	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
+	"github.com/lukeelten/openshift-update-proxy/pkg/upstream"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"net"
@@ -20,36 +21,29 @@ type OpenShiftUpdateProxy struct {
 	Config *config.UpdateProxyConfig
 	Logger *zap.SugaredLogger
 
-	Client http.Client
-	Server http.Server
-	Cache  *cache.OpenShiftVersionCache
+	Server   http.Server
+	OkdCache *cache.OpenShiftVersionCache
+	OcpCache *cache.OpenShiftVersionCache
 
-	Healthchecks *cache.HealthCheckCache
-	Metrics      *metrics.UpdateProxyMetrics
+	Metrics *metrics.UpdateProxyMetrics
+
+	OkdClient       *upstream.UpstreamClient
+	OpenShiftClient *upstream.UpstreamClient
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
 	m := metrics.NewUpdateProxyMetrics(cfg)
 	proxy := OpenShiftUpdateProxy{
-		Config:       cfg,
-		Logger:       logger,
-		Cache:        cache.NewOpenShiftVersionCache(cfg, logger, m),
-		Healthchecks: cache.NewHealthCheckCache(cfg, logger),
-		Client:       http.Client{},
+		Config:   cfg,
+		Logger:   logger,
+		OkdCache: cache.NewOpenShiftVersionCache(cfg, logger, m),
+		OcpCache: cache.NewOpenShiftVersionCache(cfg, logger, m),
 		Server: http.Server{
 			Addr: cfg.Listen,
 		},
-		Metrics: m,
-	}
-
-	if cfg.Insecure {
-		tlsConfig := tls.Config{
-			InsecureSkipVerify: true,
-		}
-		transport := http.Transport{
-			TLSClientConfig: &tlsConfig,
-		}
-		proxy.Client.Transport = &transport
+		Metrics:         m,
+		OkdClient:       upstream.NewUpstreamClient(logger, cfg.OKD.Endpoint, cfg.OKD.Insecure, cfg.OKD.Timeout),
+		OpenShiftClient: upstream.NewUpstreamClient(logger, cfg.OCP.Endpoint, cfg.OCP.Insecure, cfg.OCP.Timeout),
 	}
 
 	proxy.Server.Handler = http.HandlerFunc(proxy.ServeHTTP)
@@ -62,13 +56,6 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 
 	proxy.Server.BaseContext = func(listener net.Listener) context.Context {
 		return ctx
-	}
-
-	if proxy.Config.Health.Enabled {
-		// Start healthcheck controller
-		group.Go(func() error {
-			return proxy.Healthchecks.Run(ctx)
-		})
 	}
 
 	if proxy.Config.Metrics.Enabled {
@@ -85,11 +72,25 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 		})
 	}
 
-	// Run cache garbage collector
+	// Run cache refresh collector
 	group.Go(func() error {
-		return proxy.Cache.RunGarbageCollector(ctx)
+		return controller.NewRefreshController(proxy.Config, proxy.Logger, proxy.OkdCache).Run(globalContext)
 	})
 
+	group.Go(func() error {
+		return controller.NewRefreshController(proxy.Config, proxy.Logger, proxy.OcpCache).Run(globalContext)
+	})
+
+	// Run cache cleanup collector
+	group.Go(func() error {
+		return controller.NewCleanupController(proxy.Config, proxy.Logger, proxy.OkdCache).Run(globalContext)
+	})
+
+	group.Go(func() error {
+		return controller.NewCleanupController(proxy.Config, proxy.Logger, proxy.OcpCache).Run(globalContext)
+	})
+
+	// Start server
 	group.Go(func() error {
 		proxy.Logger.Infow("Start listening", "address", proxy.Config.Listen)
 		return proxy.Server.ListenAndServe()
@@ -108,16 +109,10 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 }
 
 func (proxy *OpenShiftUpdateProxy) healthCheck(response http.ResponseWriter, req *http.Request) {
-	status := proxy.Healthchecks.Alive()
-	proxy.Logger.Debugw("got healthcheck", "status", status)
-	proxy.Metrics.Healthcheck(status)
+	proxy.Logger.Debug("got healthcheck")
+	proxy.Metrics.Healthcheck()
 
-	if status {
-		response.WriteHeader(http.StatusOK)
-		return
-	}
-
-	response.WriteHeader(http.StatusInternalServerError)
+	response.WriteHeader(http.StatusOK)
 }
 
 func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *http.Request) {
@@ -140,45 +135,48 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 		proxy.healthCheck(response, req)
 		return
 	}
-
 	proxy.Logger.Infow("Handling request", "path", req.URL.Path, "params", req.URL.RawQuery)
+	var versionCache *cache.OpenShiftVersionCache
+	var client *upstream.UpstreamClient
 
-	query := req.URL.Query()
-	requestKey := cache.VersionKey{
-		Arch:    query.Get(QUERY_PARAM_ARCH),
-		Channel: query.Get(QUERY_PARAM_CHANNEL),
-		Version: query.Get(QUERY_PARAM_VERSION),
-	}
-	proxy.Metrics.UpdateInfo(requestKey.Arch, requestKey.Channel, requestKey.Version)
-
-	upstreamUrl, err := proxy.buildUpstreamURL(req.URL)
-	if err != nil {
-		proxy.Logger.Error("error building upstream url")
-		proxy.Logger.Debugw("upstream url", "err", err, "url", upstreamUrl, "config", proxy.Config)
-		response.WriteHeader(http.StatusInternalServerError)
+	okdPath := strings.TrimPrefix(proxy.Config.OKD.Path, "/")
+	ocpPath := strings.TrimPrefix(proxy.Config.OCP.Path, "/")
+	if strings.HasPrefix(path, okdPath) {
+		versionCache = proxy.OkdCache
+		client = proxy.OkdClient
+	} else if strings.HasPrefix(path, ocpPath) {
+		versionCache = proxy.OcpCache
+		client = proxy.OpenShiftClient
+	} else {
+		proxy.Logger.Errorw("found unknown path", "path", path)
+		response.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	body, err := proxy.Cache.GetOrCompute(requestKey, func() ([]byte, error) {
-		startTime := time.Now()
-		body, err := proxy.loadUpstream(upstreamUrl)
-		proxy.Metrics.UpstreamResponseTime(requestKey.Arch, requestKey.Channel, requestKey.Version, time.Since(startTime))
-		return body, err
-	})
+	arch, channel, version := extractQueryParams(req)
+
+	versionBody, err := versionCache.Get(arch, channel, version)
 	if err != nil {
-		proxy.Logger.Error("error requesting upstream body")
-		proxy.Logger.Debugw("upstream url", "err", err, "url", upstreamUrl, "config", proxy.Config)
-		response.WriteHeader(http.StatusInternalServerError)
-		return
+		proxy.Logger.Infow("loading info from upstream", "arch", arch, "channel", channel, "version", version)
+		versionBody, err = client.LoadVersionInfo(arch, channel, version)
+		if err != nil {
+			// todo: metric error
+			proxy.Logger.Debugw("got error when loading upstream", "error", err, "arch", arch, "channel", channel, "version", version, "endpoint", client.Endpoint, "request", req)
+			proxy.Logger.Errorw("error loading from upstream", "err", err)
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		versionCache.Set(arch, channel, version, versionBody)
 	}
 
 	response.Header().Set("Content-Type", "application/vnd.redhat.cincinnati.graph+json; version=1.0")
 	response.WriteHeader(http.StatusOK)
-	_, err = response.Write(body)
+	_, err = response.Write(versionBody)
 
 	if err != nil {
 		proxy.Logger.Errorw("error writing body", "err", err)
-		proxy.Logger.Debugw("error", "err", err, "request", req, "upstreamUrl", upstreamUrl, "body", body)
+		proxy.Logger.Debugw("error", "err", err, "request", req, "endpoint", client.Endpoint, "body", versionBody)
 		return
 	}
 }
