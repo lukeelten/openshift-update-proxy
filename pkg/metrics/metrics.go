@@ -44,8 +44,8 @@ func NewUpdateProxyMetrics(cfg *config.UpdateProxyConfig) *UpdateProxyMetrics {
 		ResponseTime:         promauto.NewHistogramVec(histogram("version", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
 
 		ErrorResponses: promauto.NewCounterVec(counter("response", "errors"), []string{"code"}),
-		RefreshCounter: promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
-		RefreshErrors:  promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
+		RefreshCounter: promauto.NewCounterVec(counter("version", "refreshed"), []string{"product", "arch", "channel", "version"}),
+		RefreshErrors:  promauto.NewCounterVec(counter("version", "refresh_errors"), []string{"product", "arch", "channel", "version"}),
 
 		Server: http.Server{
 			Handler: mux,
