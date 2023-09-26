@@ -2,11 +2,12 @@ package proxy
 
 import (
 	"context"
+	"github.com/acaloiaro/neoq"
+	"github.com/acaloiaro/neoq/backends/memory"
+	"github.com/acaloiaro/neoq/handler"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
-	"github.com/lukeelten/openshift-update-proxy/pkg/controller"
-	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
-	"github.com/lukeelten/openshift-update-proxy/pkg/upstream"
+	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"net"
@@ -22,32 +23,46 @@ type OpenShiftUpdateProxy struct {
 	Config *config.UpdateProxyConfig
 	Logger *zap.SugaredLogger
 
-	Server   http.Server
-	OkdCache *cache.OpenShiftVersionCache
-	OcpCache *cache.OpenShiftVersionCache
+	Scheduler neoq.Neoq
 
-	Metrics *metrics.UpdateProxyMetrics
+	Upstreams map[string]*UpstreamProxy
 
-	OkdClient       *upstream.UpstreamClient
-	OpenShiftClient *upstream.UpstreamClient
+	Server http.Server
+
+	Metrics *UpdateProxyMetrics
+}
+
+type UpstreamProxy struct {
+	Path   string
+	Client *UpstreamClient
+	Cache  *cache.OpenShiftVersionCache
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
-	m := metrics.NewUpdateProxyMetrics(cfg)
+	m := NewUpdateProxyMetrics(cfg)
+
 	proxy := OpenShiftUpdateProxy{
-		Config:   cfg,
-		Logger:   logger,
-		OkdCache: cache.NewOpenShiftVersionCache(cfg, logger, m, "okd"),
-		OcpCache: cache.NewOpenShiftVersionCache(cfg, logger, m, "ocp"),
+		Config: cfg,
+		Logger: logger,
 		Server: http.Server{
 			Addr: cfg.Listen,
 		},
-		Metrics:         m,
-		OkdClient:       upstream.NewUpstreamClient(logger, m, "okd", cfg.OKD.Endpoint, cfg.OKD.Insecure, cfg.OKD.Timeout),
-		OpenShiftClient: upstream.NewUpstreamClient(logger, m, "ocp", cfg.OCP.Endpoint, cfg.OCP.Insecure, cfg.OCP.Timeout),
+		Upstreams: make(map[string]*UpstreamProxy),
+		Metrics:   m,
 	}
 
 	proxy.Server.Handler = http.HandlerFunc(proxy.ServeHTTP)
+
+	for _, upstreamCfg := range cfg.Upstreams {
+		path := strings.TrimPrefix(upstreamCfg.Path, "/")
+		upstream := UpstreamProxy{
+			Path:   upstreamCfg.Path,
+			Cache:  cache.NewOpenShiftVersionCache(cfg.Cache.DefaultLifetime),
+			Client: NewUpstreamClient(logger, upstreamCfg),
+		}
+
+		proxy.Upstreams[path] = &upstream
+	}
 
 	return &proxy
 }
@@ -57,6 +72,26 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 
 	proxy.Server.BaseContext = func(listener net.Listener) context.Context {
 		return ctx
+	}
+
+	nq, err := neoq.New(ctx, neoq.WithBackend(memory.Backend))
+	if err != nil {
+		proxy.Logger.Debugw("cannot initialize task broker")
+		return err
+	}
+
+	nq.SetLogger(utils.WrapLogger(proxy.Logger))
+	proxy.Scheduler = nq
+	// Run cleanup every 30 minutes
+	err = proxy.Scheduler.StartCron(ctx, "* * * * */30", proxy.cleanupHandler())
+	if err != nil {
+		return err
+	}
+
+	// Run refresh controller very 15 minutes
+	err = proxy.Scheduler.StartCron(ctx, "* * * * */15", proxy.refreshHandler())
+	if err != nil {
+		return err
 	}
 
 	if proxy.Config.Metrics.Enabled {
@@ -73,24 +108,6 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 		})
 	}
 
-	// Run cache refresh collector
-	group.Go(func() error {
-		return controller.NewRefreshController(proxy.Config, proxy.Logger, proxy.Metrics, proxy.OkdCache, proxy.OkdClient).Run(globalContext)
-	})
-
-	group.Go(func() error {
-		return controller.NewRefreshController(proxy.Config, proxy.Logger, proxy.Metrics, proxy.OcpCache, proxy.OkdClient).Run(globalContext)
-	})
-
-	// Run cache cleanup collector
-	group.Go(func() error {
-		return controller.NewCleanupController(proxy.Config, proxy.Logger, proxy.OkdCache).Run(globalContext)
-	})
-
-	group.Go(func() error {
-		return controller.NewCleanupController(proxy.Config, proxy.Logger, proxy.OcpCache).Run(globalContext)
-	})
-
 	// Start server
 	group.Go(func() error {
 		proxy.Logger.Infow("Start listening", "address", proxy.Config.Listen)
@@ -106,6 +123,16 @@ func (proxy *OpenShiftUpdateProxy) Run(globalContext context.Context) error {
 		return proxy.Server.Shutdown(shutdownCtx)
 	})
 
+	// shutdown queue
+	group.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		proxy.Scheduler.Shutdown(shutdownCtx)
+		return nil
+	})
+
 	return group.Wait()
 }
 
@@ -118,6 +145,7 @@ func (proxy *OpenShiftUpdateProxy) healthCheck(response http.ResponseWriter, req
 
 func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *http.Request) {
 	startTime := time.Now()
+
 	if req.URL == nil {
 		proxy.Logger.Error("Got invalid request")
 		proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
@@ -141,54 +169,90 @@ func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *
 	}
 
 	proxy.Logger.Infow("Handling request", "path", req.URL.Path, "params", req.URL.RawQuery)
-	var versionCache *cache.OpenShiftVersionCache
-	var client *upstream.UpstreamClient
-	var product string
 
-	okdPath := strings.TrimPrefix(proxy.Config.OKD.Path, "/")
-	ocpPath := strings.TrimPrefix(proxy.Config.OCP.Path, "/")
-	if strings.HasPrefix(path, okdPath) {
-		versionCache = proxy.OkdCache
-		client = proxy.OkdClient
-		product = "okd"
-	} else if strings.HasPrefix(path, ocpPath) {
-		versionCache = proxy.OcpCache
-		client = proxy.OpenShiftClient
-		product = "ocp"
-	} else {
-		proxy.Logger.Errorw("found unknown path", "path", path)
-		proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusNotFound)).Inc()
+	upstream, ok := proxy.Upstreams[path]
+	if !ok {
 		response.WriteHeader(http.StatusNotFound)
 		return
 	}
 
-	arch, channel, version := extractQueryParams(req)
-
-	versionBody, err := versionCache.Get(arch, channel, version)
+	arch, channel, version := utils.ExtractQueryParams(req)
+	versionBody, err := upstream.Cache.Get(arch, channel, version)
 	if err != nil {
 		proxy.Logger.Infow("loading info from upstream", "arch", arch, "channel", channel, "version", version)
-		versionBody, err = client.LoadVersionInfo(arch, channel, version)
+		versionBody, err = upstream.Client.LoadVersionInfo(arch, channel, version)
 		if err != nil {
-			proxy.Logger.Debugw("got error when loading upstream", "error", err, "arch", arch, "channel", channel, "version", version, "endpoint", client.Endpoint, "request", req)
+			proxy.Logger.Debugw("got error when loading upstream", "error", err, "arch", arch, "channel", channel, "version", version, "endpoint", upstream.Client.Endpoint, "request", req)
 			proxy.Logger.Errorw("error loading from upstream", "err", err)
 			proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
 			response.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
-		versionCache.Set(arch, channel, version, versionBody)
+		upstream.Cache.Set(arch, channel, version, versionBody)
 	}
 
 	response.Header().Set("Content-Type", "application/vnd.redhat.cincinnati.graph+json; version=1.0")
 	response.WriteHeader(http.StatusOK)
 	_, err = response.Write(versionBody)
-
-	elapsed := time.Until(startTime)
-	proxy.Metrics.ResponseTime.WithLabelValues(product, arch, channel, version).Observe(float64(elapsed.Microseconds()))
+	defer func() {
+		elapsed := time.Since(startTime)
+		proxy.Metrics.ResponseTime.WithLabelValues(upstream.Client.Endpoint, arch, channel, version).Observe(float64(elapsed))
+	}()
 
 	if err != nil {
-		proxy.Logger.Errorw("error writing body", "err", err)
-		proxy.Logger.Debugw("error", "err", err, "request", req, "endpoint", client.Endpoint, "body", versionBody)
+		proxy.Logger.Errorw("error writing body", "err", err, "path", upstream.Path)
+		proxy.Logger.Debugw("error", "err", err, "request", req, "endpoint", upstream.Client.Endpoint, "body", versionBody)
 		return
 	}
+}
+
+func (proxy *OpenShiftUpdateProxy) cleanupHandler() handler.Handler {
+	h := handler.NewPeriodic(func(ctx context.Context) error {
+		now := time.Now()
+		for _, upstream := range proxy.Upstreams {
+			num := upstream.Cache.DeleteAll(func(entry *cache.VersionEntry) bool {
+				return entry.LastAccessed.Add(proxy.Config.Cache.EvictAfter).Before(now)
+			})
+
+			proxy.Logger.Debugw("Deleted entries", "path", upstream.Path, "num", num)
+			if num > 0 {
+				proxy.Logger.Infow("Deleted entries from cache", "path", upstream.Path, "entries", num)
+			}
+		}
+
+		return nil
+	})
+
+	h.WithOptions(handler.JobTimeout(utils.DEFAULT_JOB_TIMEOUT), handler.Concurrency(1))
+
+	return h
+}
+
+func (proxy *OpenShiftUpdateProxy) refreshHandler() handler.Handler {
+	h := handler.NewPeriodic(func(ctx context.Context) error {
+		now := time.Now()
+		for _, upstream := range proxy.Upstreams {
+			upstream.Cache.Foreach(func(entry *cache.VersionEntry) {
+				if now.After(entry.ValidUntil) {
+					proxy.Logger.Debugw("start refresh entry", "entry", *entry)
+
+					body, err := upstream.Client.LoadVersionInfo(entry.Arch, entry.Channel, entry.Version)
+					if err != nil {
+						proxy.Logger.Errorw("got error refreshing entry", "err", err, "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
+						return
+					}
+
+					upstream.Cache.Set(entry.Arch, entry.Channel, entry.Version, body)
+					proxy.Logger.Infow("successfully refreshed entry", "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
+				}
+			})
+		}
+
+		return nil
+	})
+
+	h.WithOptions(handler.JobTimeout(utils.DEFAULT_JOB_TIMEOUT), handler.Concurrency(1))
+
+	return h
 }

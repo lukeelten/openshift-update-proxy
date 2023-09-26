@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"github.com/ilyakaznacheev/cleanenv"
 	"log"
 	"os"
+	"strings"
 )
 
 const DEFAULT_CONFIG_FILE_NAME = "config.yaml"
@@ -38,6 +40,27 @@ func LoadConfig() *UpdateProxyConfig {
 	}
 
 	return &config
+}
+
+func (config *UpdateProxyConfig) Validate() error {
+	if len(config.Upstreams) == 0 {
+		return errors.New("cannot find any upstream endpoint")
+	}
+
+	for i, upstream := range config.Upstreams {
+		path := strings.ToLower(upstream.Path)
+		for j, inner := range config.Upstreams {
+			if i == j {
+				continue
+			}
+
+			if strings.Compare(path, strings.ToLower(inner.Path)) == 0 {
+				return errors.New("duplicate paths detected")
+			}
+		}
+	}
+
+	return nil
 }
 
 func configFileName() string {

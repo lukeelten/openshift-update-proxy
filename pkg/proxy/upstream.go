@@ -1,32 +1,29 @@
-package upstream
+package proxy
 
 import (
 	"crypto/tls"
 	"errors"
-	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
-	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
+	"github.com/lukeelten/openshift-update-proxy/pkg/config"
+	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 type UpstreamClient struct {
-	Logger  *zap.SugaredLogger
-	Metrics *metrics.UpdateProxyMetrics
-	Product string
+	Logger *zap.SugaredLogger
 
-	Client http.Client
-
+	Client   http.Client
 	Endpoint string
 }
 
-func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, product string, endpoint string, insecure bool, timeout time.Duration) *UpstreamClient {
+func NewUpstreamClient(logger *zap.SugaredLogger, upstreamConfig config.UpstreamConfig) *UpstreamClient {
 	client := http.Client{
-		Timeout: timeout,
+		Timeout: upstreamConfig.Timeout,
 	}
-	if insecure {
+
+	if upstreamConfig.Insecure {
 		tlsConfig := tls.Config{
 			InsecureSkipVerify: true,
 		}
@@ -38,16 +35,12 @@ func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMet
 
 	return &UpstreamClient{
 		Logger:   logger,
-		Metrics:  metric,
 		Client:   client,
-		Product:  product,
-		Endpoint: endpoint,
+		Endpoint: upstreamConfig.Endpoint,
 	}
 }
 
 func (client *UpstreamClient) LoadVersionInfo(arch, channel, version string) ([]byte, error) {
-	startTime := time.Now()
-
 	finalUrl, err := client.buildURL(arch, channel, version)
 	if err != nil {
 		client.Logger.Debugw("cannot build upstream url", "endpoint", client.Endpoint, "error", err)
@@ -81,8 +74,6 @@ func (client *UpstreamClient) LoadVersionInfo(arch, channel, version string) ([]
 		return []byte{}, err
 	}
 
-	elapsed := time.Until(startTime)
-	client.Metrics.UpstreamResponseTime.WithLabelValues(client.Product, arch, channel, version).Observe(float64(elapsed.Microseconds()))
 	return body, nil
 }
 
@@ -93,12 +84,6 @@ func (client *UpstreamClient) buildURL(arch, channel, version string) (string, e
 		return "", err
 	}
 
-	newQuery := url.Values{}
-
-	newQuery.Set(cache.QUERY_PARAM_ARCH, arch)
-	newQuery.Set(cache.QUERY_PARAM_CHANNEL, channel)
-	newQuery.Set(cache.QUERY_PARAM_VERSION, version)
-
-	finalUrl.RawQuery = newQuery.Encode()
+	finalUrl.RawQuery = utils.MakeQueryString(arch, channel, version)
 	return finalUrl.String(), nil
 }

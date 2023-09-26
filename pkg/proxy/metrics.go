@@ -1,4 +1,4 @@
-package metrics
+package proxy
 
 import (
 	"context"
@@ -40,8 +40,8 @@ func NewUpdateProxyMetrics(cfg *config.UpdateProxyConfig) *UpdateProxyMetrics {
 		VersionAccessed: promauto.NewCounterVec(counter("version", "access"), []string{"product", "arch", "channel", "version"}),
 		Healthcheck:     promauto.NewCounter(counter("healthcheck", "requests")),
 
-		UpstreamResponseTime: promauto.NewHistogramVec(histogram("upstream", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
-		ResponseTime:         promauto.NewHistogramVec(histogram("version", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
+		UpstreamResponseTime: promauto.NewHistogramVec(histogram("upstream", "response_time_ms"), []string{"endpoint", "arch", "channel", "version"}),
+		ResponseTime:         promauto.NewHistogramVec(histogram("version", "response_time_ms"), []string{"endpoint", "arch", "channel", "version"}),
 
 		ErrorResponses: promauto.NewCounterVec(counter("response", "errors"), []string{"code"}),
 		RefreshCounter: promauto.NewCounterVec(counter("version", "refreshed"), []string{"product", "arch", "channel", "version"}),
@@ -62,4 +62,28 @@ func (metrics *UpdateProxyMetrics) Shutdown() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return metrics.Server.Shutdown(shutdownCtx)
+}
+
+func counter(subsystem, name string) prometheus.CounterOpts {
+	return prometheus.CounterOpts{
+		Namespace: METRIC_NAMESPACE,
+		Subsystem: subsystem,
+		Name:      name,
+	}
+}
+
+func gauge(subsystem, name string) prometheus.GaugeOpts {
+	return prometheus.GaugeOpts{
+		Namespace: METRIC_NAMESPACE,
+		Subsystem: subsystem,
+		Name:      name,
+	}
+}
+
+func histogram(subsystem, name string) prometheus.HistogramOpts {
+	return prometheus.HistogramOpts{
+		Namespace: METRIC_NAMESPACE,
+		Subsystem: subsystem,
+		Name:      name,
+	}
 }

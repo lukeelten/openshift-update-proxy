@@ -1,13 +1,8 @@
 package cache
 
 import (
+	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
 	"time"
-)
-
-const (
-	QUERY_PARAM_ARCH    = "arch"
-	QUERY_PARAM_CHANNEL = "channel"
-	QUERY_PARAM_VERSION = "version"
 )
 
 type VersionEntry struct {
@@ -22,9 +17,5 @@ type VersionEntry struct {
 }
 
 func (entry VersionEntry) Key() string {
-	return makeKey(entry.Arch, entry.Channel, entry.Version)
-}
-
-func (entry VersionEntry) IsValid() bool {
-	return time.Now().Before(entry.ValidUntil)
+	return utils.MakeKey(entry.Arch, entry.Channel, entry.Version)
 }

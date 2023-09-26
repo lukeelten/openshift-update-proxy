@@ -1,0 +1,25 @@
+debug: false
+listen: 0.0.0.0:8080
+
+upstreams:
+  - path: /ocp
+    endpoint: "https://api.openshift.com/api/upgrades_info/v1/graph"
+    insecure: false
+    timeout: 10s
+  - path: /okd
+    endpoint: "https://amd64.origin.releases.ci.openshift.org/graph"
+    insecure: false
+    timeout: 10s
+
+cache:
+  defaultLifetime: 8h
+  evictAfter: 168h
+
+
+metrics:
+  enabled: true
+  listen: 0.0.0.0:9090
+
+health:
+  enabled: true
+  path: /health

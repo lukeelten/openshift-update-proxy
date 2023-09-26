@@ -16,7 +16,11 @@ import (
 
 func main() {
 	cfg := config.LoadConfig()
-	var err error
+	err := cfg.Validate()
+
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	var logger *zap.Logger
 	if cfg.Debug {
