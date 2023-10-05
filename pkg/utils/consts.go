@@ -14,9 +14,8 @@ const (
 	QUERY_PARAM_CHANNEL = "channel"
 	QUERY_PARAM_VERSION = "version"
 
-	QUEUE_CLEANUP       = "cleanup"
-	QUEUE_REFRESH       = "refresh"
 	QUEUE_REFRESH_ENTRY = "refresh-entry"
 
-	DEFAULT_JOB_TIMEOUT = 10 + time.Second
+	JOB_MAX_RETRIES     = 100
+	DEFAULT_JOB_TIMEOUT = 10 * time.Second
 )

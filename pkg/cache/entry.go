@@ -2,7 +2,6 @@ package cache
 
 import (
 	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
-	"time"
 )
 
 type VersionEntry struct {
@@ -11,9 +10,6 @@ type VersionEntry struct {
 	Version string
 
 	Body []byte
-
-	LastAccessed time.Time
-	ValidUntil   time.Time
 }
 
 func (entry VersionEntry) Key() string {

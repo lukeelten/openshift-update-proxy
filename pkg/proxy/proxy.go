@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"github.com/acaloiaro/neoq"
 	"github.com/acaloiaro/neoq/backends/memory"
 	"github.com/acaloiaro/neoq/handler"
+	"github.com/acaloiaro/neoq/jobs"
 	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
 	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
@@ -57,7 +59,7 @@ func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredL
 		path := strings.TrimPrefix(upstreamCfg.Path, "/")
 		upstream := UpstreamProxy{
 			Path:   upstreamCfg.Path,
-			Cache:  cache.NewOpenShiftVersionCache(cfg.Cache.DefaultLifetime),
+			Cache:  cache.NewOpenShiftVersionCache(),
 			Client: NewUpstreamClient(logger, upstreamCfg),
 		}
 
@@ -229,30 +231,49 @@ func (proxy *OpenShiftUpdateProxy) cleanupHandler() handler.Handler {
 	return h
 }
 
-func (proxy *OpenShiftUpdateProxy) refreshHandler() handler.Handler {
-	h := handler.NewPeriodic(func(ctx context.Context) error {
-		now := time.Now()
-		for _, upstream := range proxy.Upstreams {
-			upstream.Cache.Foreach(func(entry *cache.VersionEntry) {
-				if now.After(entry.ValidUntil) {
-					proxy.Logger.Debugw("start refresh entry", "entry", *entry)
+func (proxy *OpenShiftUpdateProxy) updateEntryHandler() handler.Handler {
+	h := handler.New(utils.QUEUE_REFRESH_ENTRY, func(ctx context.Context) error {
+		job, err := jobs.FromContext(ctx)
+		if err != nil {
+			return err
+		}
 
-					body, err := upstream.Client.LoadVersionInfo(entry.Arch, entry.Channel, entry.Version)
-					if err != nil {
-						proxy.Logger.Errorw("got error refreshing entry", "err", err, "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
-						return
-					}
+		upstream := job.Payload["upstream"].(string)
+		arch := job.Payload["arch"].(string)
+		channel := job.Payload["channel"].(string)
+		version := job.Payload["version"].(string)
 
-					upstream.Cache.Set(entry.Arch, entry.Channel, entry.Version, body)
-					proxy.Logger.Infow("successfully refreshed entry", "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
-				}
+		if upstreamProxy, ok := proxy.Upstreams[upstream]; ok {
+			proxy.Logger.Debugw("start refresh entry", "path", upstreamProxy.Path, "arch", arch, "channel", channel, "version", version)
+
+			body, err := upstreamProxy.Client.LoadVersionInfo(arch, channel, version)
+			if err != nil {
+				proxy.Logger.Errorw("got error refreshing entry", "err", err, "path", upstreamProxy.Path, "arch", arch, "channel", channel, "version", version)
+				return err
+			}
+
+			upstreamProxy.Cache.Set(arch, channel, version, body)
+			proxy.Logger.Infow("successfully refreshed entry", "path", upstreamProxy.Path, "arch", arch, "channel", channel, "version", version)
+
+			proxy.Scheduler.Enqueue(context.Background(), &jobs.Job{
+				Queue: utils.QUEUE_REFRESH_ENTRY,
+				Payload: map[string]any{
+					"upstream": upstream,
+					"arch":     arch,
+					"channel":  channel,
+					"version":  version,
+				},
+				RunAfter: time.Now().Add(proxy.Config.DefaultLifetime),
+				MaxRetries:
 			})
+		} else {
+			return errors.New("invalid upstream")
 		}
 
 		return nil
 	})
 
-	h.WithOptions(handler.JobTimeout(utils.DEFAULT_JOB_TIMEOUT), handler.Concurrency(1))
+	h.WithOptions(handler.Concurrency(4), handler.JobTimeout(utils.DEFAULT_JOB_TIMEOUT))
 
 	return h
 }

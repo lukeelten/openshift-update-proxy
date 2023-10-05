@@ -16,11 +16,10 @@ type OpenShiftVersionCache struct {
 	cache map[string]VersionEntry
 }
 
-func NewOpenShiftVersionCache(defaultLifetime time.Duration) *OpenShiftVersionCache {
+func NewOpenShiftVersionCache() *OpenShiftVersionCache {
 	return &OpenShiftVersionCache{
-		defaultLifetime: defaultLifetime,
-		lock:            sync.RWMutex{},
-		cache:           make(map[string]VersionEntry),
+		lock:  sync.RWMutex{},
+		cache: make(map[string]VersionEntry),
 	}
 }
 
@@ -32,7 +31,6 @@ func (cache *OpenShiftVersionCache) Get(arch, channel, version string) ([]byte, 
 
 	entry, ok := cache.cache[key]
 	if ok {
-		entry.LastAccessed = time.Now()
 		return entry.Body, nil
 	}
 
@@ -41,12 +39,10 @@ func (cache *OpenShiftVersionCache) Get(arch, channel, version string) ([]byte, 
 
 func (cache *OpenShiftVersionCache) Set(arch, channel, version string, body []byte) {
 	entry := VersionEntry{
-		Arch:         arch,
-		Channel:      channel,
-		Version:      version,
-		Body:         body,
-		LastAccessed: time.Now(),
-		ValidUntil:   time.Now().Add(cache.defaultLifetime),
+		Arch:    arch,
+		Channel: channel,
+		Version: version,
+		Body:    body,
 	}
 
 	key := entry.Key()
@@ -96,12 +92,10 @@ func (cache *OpenShiftVersionCache) deepCopy() map[string]VersionEntry {
 	newMap := make(map[string]VersionEntry)
 	for key, value := range cache.cache {
 		newMap[key] = VersionEntry{
-			Arch:         value.Arch,
-			Channel:      value.Channel,
-			Version:      value.Version,
-			Body:         value.Body,
-			LastAccessed: value.LastAccessed,
-			ValidUntil:   value.ValidUntil,
+			Arch:    value.Arch,
+			Channel: value.Channel,
+			Version: value.Version,
+			Body:    value.Body,
 		}
 	}
 

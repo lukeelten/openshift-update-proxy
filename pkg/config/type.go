@@ -9,10 +9,8 @@ type UpdateProxyConfig struct {
 
 	Upstreams []UpstreamConfig `yaml:"upstreams"`
 
-	Cache struct {
-		DefaultLifetime time.Duration `yaml:"defaultLifetime" env:"CACHE_DEFAULT_TTL" env-default:"8h"`
-		EvictAfter      time.Duration `yaml:"evictAfter" env:"CACHE_EVICT_AFTER" env-default:"168h"`
-	} `yaml:"cache"`
+	DefaultLifetime time.Duration `yaml:"defaultLifetime" env:"CACHE_DEFAULT_TTL" env-default:"8h"`
+	MaxRetries      int           `yaml:"maxRetries" env:"MAX_RETRIES" env-default:"20"`
 
 	Metrics struct {
 		Enabled bool   `yaml:"enabled" env-default:"true"`
