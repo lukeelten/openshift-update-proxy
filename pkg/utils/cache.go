@@ -1,14 +1,9 @@
-package cache
+package utils
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/url"
-)
-
-var (
-	ERR_NOT_FOUND = errors.New("cannot find entry in cache")
 )
 
 func hash(key string) string {
@@ -17,10 +12,14 @@ func hash(key string) string {
 	return fmt.Sprintf("%x", sum)
 }
 
-func makeKey(arch, channel, version string) string {
+func MakeKey(arch, channel, version string) string {
+	return hash(MakeQueryString(arch, channel, version))
+}
+
+func MakeQueryString(arch, channel, version string) string {
 	values := make(url.Values)
 	values.Add(QUERY_PARAM_ARCH, arch)
 	values.Add(QUERY_PARAM_CHANNEL, channel)
 	values.Add(QUERY_PARAM_VERSION, version)
-	return hash(values.Encode())
+	return values.Encode()
 }

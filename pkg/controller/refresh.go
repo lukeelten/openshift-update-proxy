@@ -2,10 +2,9 @@ package controller
 
 import (
 	"context"
-	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
+	"github.com/lukeelten/openshift-update-proxy/pkg/client"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
 	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
-	"github.com/lukeelten/openshift-update-proxy/pkg/upstream"
 	"go.uber.org/zap"
 	"time"
 )
@@ -14,13 +13,12 @@ type RefreshController struct {
 	Config  *config.UpdateProxyConfig
 	Logger  *zap.SugaredLogger
 	Metrics *metrics.UpdateProxyMetrics
-	Product string
 
-	Cache  *cache.OpenShiftVersionCache
-	Client *upstream.UpstreamClient
+	Cache  *client.OpenShiftVersionCache
+	Client *client.UpstreamClient
 }
 
-func NewRefreshController(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, versionCache *cache.OpenShiftVersionCache, client *upstream.UpstreamClient) *RefreshController {
+func NewRefreshController(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, versionCache *client.OpenShiftVersionCache, client *client.UpstreamClient) *RefreshController {
 	return &RefreshController{
 		Config:  cfg,
 		Logger:  logger,
@@ -35,9 +33,9 @@ func (con *RefreshController) Run(ctx context.Context) error {
 
 	for {
 		now := time.Now()
-		con.Cache.Foreach(func(entry *cache.VersionEntry) {
+		con.Cache.Foreach(func(entry client.VersionEntry) {
 			if now.After(entry.ValidUntil) {
-				con.Logger.Debugw("start refresh entry", "entry", *entry)
+				con.Logger.Debugw("start refresh entry", "entry", entry)
 
 				body, err := con.Client.LoadVersionInfo(entry.Arch, entry.Channel, entry.Version)
 				if err != nil {
@@ -46,8 +44,7 @@ func (con *RefreshController) Run(ctx context.Context) error {
 					return
 				}
 
-				entry.Body = body
-				entry.ValidUntil = now.Add(con.Config.Cache.DefaultLifetime)
+				con.Cache.Set(entry.Arch, entry.Channel, entry.Version, body)
 				con.Logger.Infow("successfully refreshed entry", "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
 				con.Metrics.RefreshCounter.WithLabelValues(con.Client.Product, entry.Arch, entry.Channel, entry.Version).Inc()
 			}

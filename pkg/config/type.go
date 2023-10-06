@@ -8,14 +8,14 @@ type UpdateProxyConfig struct {
 	Listen string `yaml:"listen" env:"HTTP_LISTEN" env-default:"0.0.0.0:8080"`
 
 	OKD struct {
-		Path     string        `yaml:"/path" env-default:"/okd"`
+		Path     string        `yaml:"path" env-default:"/okd"`
 		Endpoint string        `yaml:"endpoint" env:"OKD_ENDPOINT" env-default:"https://amd64.origin.releases.ci.openshift.org/graph"`
 		Insecure bool          `yaml:"insecure" env:"OKD_ENDPOINT_INSECURE" env-default:"false"`
 		Timeout  time.Duration `yaml:"timeout" env-default:"10s"`
 	} `yaml:"okd"`
 
 	OCP struct {
-		Path     string        `yaml:"/path" env-default:"/ocp"`
+		Path     string        `yaml:"path" env-default:"/ocp"`
 		Endpoint string        `yaml:"endpoint" env:"OPENSHIFT_ENDPOINT" env-default:"https://api.openshift.com/api/upgrades_info/v1/graph"`
 		Insecure bool          `yaml:"insecure" env:"OPENSHIFT_ENDPOINT_INSECURE" env-default:"false"`
 		Timeout  time.Duration `yaml:"timeout" env-default:"10s"`

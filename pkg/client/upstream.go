@@ -1,10 +1,10 @@
-package upstream
+package client
 
 import (
 	"crypto/tls"
 	"errors"
-	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
 	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
+	"github.com/lukeelten/openshift-update-proxy/pkg/utils"
 	"go.uber.org/zap"
 	"io"
 	"net/http"
@@ -15,14 +15,13 @@ import (
 type UpstreamClient struct {
 	Logger  *zap.SugaredLogger
 	Metrics *metrics.UpdateProxyMetrics
-	Product string
 
 	Client http.Client
 
 	Endpoint string
 }
 
-func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, product string, endpoint string, insecure bool, timeout time.Duration) *UpstreamClient {
+func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMetrics, endpoint string, insecure bool, timeout time.Duration) *UpstreamClient {
 	client := http.Client{
 		Timeout: timeout,
 	}
@@ -40,7 +39,6 @@ func NewUpstreamClient(logger *zap.SugaredLogger, metric *metrics.UpdateProxyMet
 		Logger:   logger,
 		Metrics:  metric,
 		Client:   client,
-		Product:  product,
 		Endpoint: endpoint,
 	}
 }
@@ -95,9 +93,9 @@ func (client *UpstreamClient) buildURL(arch, channel, version string) (string, e
 
 	newQuery := url.Values{}
 
-	newQuery.Set(cache.QUERY_PARAM_ARCH, arch)
-	newQuery.Set(cache.QUERY_PARAM_CHANNEL, channel)
-	newQuery.Set(cache.QUERY_PARAM_VERSION, version)
+	newQuery.Set(utils.QUERY_PARAM_ARCH, arch)
+	newQuery.Set(utils.QUERY_PARAM_CHANNEL, channel)
+	newQuery.Set(utils.QUERY_PARAM_VERSION, version)
 
 	finalUrl.RawQuery = newQuery.Encode()
 	return finalUrl.String(), nil

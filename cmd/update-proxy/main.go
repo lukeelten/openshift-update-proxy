@@ -6,7 +6,6 @@ import (
 	"github.com/lukeelten/openshift-update-proxy/pkg/proxy"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 
@@ -35,7 +34,7 @@ func main() {
 	defer logger.Sync()
 	app := proxy.NewOpenShiftUpdateProxy(cfg, logger.Sugar())
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGQUIT)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT, syscall.SIGKILL, syscall.SIGHUP)
 	defer stop()
 
 	globalContext, cancel := context.WithCancel(context.Background())

@@ -2,17 +2,15 @@ package proxy
 
 import (
 	"context"
-	"github.com/lukeelten/openshift-update-proxy/pkg/cache"
+	"github.com/lukeelten/openshift-update-proxy/pkg/client"
 	"github.com/lukeelten/openshift-update-proxy/pkg/config"
 	"github.com/lukeelten/openshift-update-proxy/pkg/controller"
 	"github.com/lukeelten/openshift-update-proxy/pkg/metrics"
-	"github.com/lukeelten/openshift-update-proxy/pkg/upstream"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -22,32 +20,37 @@ type OpenShiftUpdateProxy struct {
 	Config *config.UpdateProxyConfig
 	Logger *zap.SugaredLogger
 
-	Server   http.Server
-	OkdCache *cache.OpenShiftVersionCache
-	OcpCache *cache.OpenShiftVersionCache
+	Server http.Server
 
 	Metrics *metrics.UpdateProxyMetrics
 
-	OkdClient       *upstream.UpstreamClient
-	OpenShiftClient *upstream.UpstreamClient
+	OkdClient       *client.OpenShiftVersionClient
+	OpenShiftClient *client.OpenShiftVersionClient
 }
 
 func NewOpenShiftUpdateProxy(cfg *config.UpdateProxyConfig, logger *zap.SugaredLogger) *OpenShiftUpdateProxy {
 	m := metrics.NewUpdateProxyMetrics(cfg)
+	mux := http.NewServeMux()
+
 	proxy := OpenShiftUpdateProxy{
-		Config:   cfg,
-		Logger:   logger,
-		OkdCache: cache.NewOpenShiftVersionCache(cfg, logger, m, "okd"),
-		OcpCache: cache.NewOpenShiftVersionCache(cfg, logger, m, "ocp"),
+		Config: cfg,
+		Logger: logger,
 		Server: http.Server{
-			Addr: cfg.Listen,
+			Addr:    cfg.Listen,
+			Handler: mux,
 		},
 		Metrics:         m,
-		OkdClient:       upstream.NewUpstreamClient(logger, m, "okd", cfg.OKD.Endpoint, cfg.OKD.Insecure, cfg.OKD.Timeout),
-		OpenShiftClient: upstream.NewUpstreamClient(logger, m, "ocp", cfg.OCP.Endpoint, cfg.OCP.Insecure, cfg.OCP.Timeout),
+		OkdClient:       client.NewUpstreamClient(logger, m, "okd", cfg.OKD.Endpoint, cfg.OKD.Insecure, cfg.OKD.Timeout),
+		OpenShiftClient: client.NewUpstreamClient(logger, m, "ocp", cfg.OCP.Endpoint, cfg.OCP.Insecure, cfg.OCP.Timeout),
 	}
 
-	proxy.Server.Handler = http.HandlerFunc(proxy.ServeHTTP)
+	if proxy.Config.Health.Enabled {
+		proxy.Logger.Infow("enabled health endpoint", "endpoint", proxy.Config.Health.Path)
+		mux.HandleFunc(proxy.Config.Health.Path, proxy.healthCheck)
+	}
+
+	mux.HandleFunc(proxy.Config.OCP.Path, proxy.ocpHandler())
+	mux.HandleFunc(proxy.Config.OKD.Path, proxy.okdHandler())
 
 	return &proxy
 }
@@ -116,51 +119,45 @@ func (proxy *OpenShiftUpdateProxy) healthCheck(response http.ResponseWriter, req
 	response.WriteHeader(http.StatusOK)
 }
 
+func (proxy *OpenShiftUpdateProxy) okdHandler() http.HandlerFunc {
+
+	return func(writer http.ResponseWriter, request *http.Request) {
+
+	}
+}
+
+func (proxy *OpenShiftUpdateProxy) ocpHandler() http.HandlerFunc {
+
+	return func(writer http.ResponseWriter, request *http.Request) {
+
+	}
+}
+
+func (proxy *OpenShiftUpdateProxy) productHandler(client *client.OpenShiftVersionClient) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		// @todo metrics
+		body, err := client.Load(request)
+		if err != nil {
+			proxy.Logger.Debugw("got error while processing request", "err", err, "request", request)
+			proxy.Logger.Errorw("error on request", "err", err)
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		writer.WriteHeader(http.StatusOK)
+		_, err = writer.Write(body)
+		if err != nil {
+			proxy.Logger.Debugw("got error writing request", "err", err, "request", request)
+			proxy.Logger.Errorw("error on request", "err", err)
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 func (proxy *OpenShiftUpdateProxy) ServeHTTP(response http.ResponseWriter, req *http.Request) {
-	startTime := time.Now()
-	if req.URL == nil {
-		proxy.Logger.Error("Got invalid request")
-		proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusInternalServerError)).Inc()
-		response.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodOptions {
-		proxy.Logger.Error("Got invalid request method")
-		proxy.Logger.Debugw("request", "req", req)
-		proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusBadRequest)).Inc()
-		response.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	path := strings.TrimPrefix(req.URL.Path, "/")
-	healthPath := strings.TrimPrefix(proxy.Config.Health.Path, "/")
-	if strings.HasPrefix(path, healthPath) {
-		proxy.healthCheck(response, req)
-		return
-	}
 
 	proxy.Logger.Infow("Handling request", "path", req.URL.Path, "params", req.URL.RawQuery)
-	var versionCache *cache.OpenShiftVersionCache
-	var client *upstream.UpstreamClient
-	var product string
-
-	okdPath := strings.TrimPrefix(proxy.Config.OKD.Path, "/")
-	ocpPath := strings.TrimPrefix(proxy.Config.OCP.Path, "/")
-	if strings.HasPrefix(path, okdPath) {
-		versionCache = proxy.OkdCache
-		client = proxy.OkdClient
-		product = "okd"
-	} else if strings.HasPrefix(path, ocpPath) {
-		versionCache = proxy.OcpCache
-		client = proxy.OpenShiftClient
-		product = "ocp"
-	} else {
-		proxy.Logger.Errorw("found unknown path", "path", path)
-		proxy.Metrics.ErrorResponses.WithLabelValues(strconv.Itoa(http.StatusNotFound)).Inc()
-		response.WriteHeader(http.StatusNotFound)
-		return
-	}
 
 	arch, channel, version := extractQueryParams(req)
 

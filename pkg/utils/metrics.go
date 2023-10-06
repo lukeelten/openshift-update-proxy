@@ -1,8 +1,8 @@
-package metrics
+package utils
 
 import "github.com/prometheus/client_golang/prometheus"
 
-func counter(subsystem, name string) prometheus.CounterOpts {
+func Counter(subsystem, name string) prometheus.CounterOpts {
 	return prometheus.CounterOpts{
 		Namespace: METRIC_NAMESPACE,
 		Subsystem: subsystem,
@@ -10,7 +10,7 @@ func counter(subsystem, name string) prometheus.CounterOpts {
 	}
 }
 
-func gauge(subsystem, name string) prometheus.GaugeOpts {
+func Gauge(subsystem, name string) prometheus.GaugeOpts {
 	return prometheus.GaugeOpts{
 		Namespace: METRIC_NAMESPACE,
 		Subsystem: subsystem,
@@ -18,7 +18,7 @@ func gauge(subsystem, name string) prometheus.GaugeOpts {
 	}
 }
 
-func histogram(subsystem, name string) prometheus.HistogramOpts {
+func Histogram(subsystem, name string) prometheus.HistogramOpts {
 	return prometheus.HistogramOpts{
 		Namespace: METRIC_NAMESPACE,
 		Subsystem: subsystem,
