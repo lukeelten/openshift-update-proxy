@@ -80,7 +80,7 @@ func (client *UpstreamClient) LoadVersionInfo(arch, channel, version string) ([]
 	}
 
 	elapsed := time.Until(startTime)
-	client.Metrics.UpstreamResponseTime.WithLabelValues(client.Product, arch, channel, version).Observe(float64(elapsed.Microseconds()))
+	client.Metrics.UpstreamResponseTime.WithLabelValues(arch, channel, version).Observe(float64(elapsed.Microseconds()))
 	return body, nil
 }
 

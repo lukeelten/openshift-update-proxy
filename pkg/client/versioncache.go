@@ -38,8 +38,8 @@ func NewOpenShiftVersionCache(defaultLifetime time.Duration, logger *zap.Sugared
 	}
 }
 
-func (cache *OpenShiftVersionCache) Size() int {
-	return len(cache.cache)
+func (cache *OpenShiftVersionCache) Size() float64 {
+	return float64(len(cache.cache))
 }
 
 func (cache *OpenShiftVersionCache) HasKey(arch, channel, version string) bool {

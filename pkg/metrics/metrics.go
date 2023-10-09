@@ -33,18 +33,18 @@ func NewUpdateProxyMetrics(cfg *config.UpdateProxyConfig) *UpdateProxyMetrics {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	return &UpdateProxyMetrics{
-		MetricCacheMiss: promauto.NewCounterVec(utils.Counter("cache", "miss"), []string{"product"}),
-		MetricCacheHit:  promauto.NewCounterVec(utils.Counter("cache", "hit"), []string{"product"}),
-		CacheSize:       promauto.NewGaugeVec(utils.Gauge("cache", "size"), []string{"product"}),
-		VersionAccessed: promauto.NewCounterVec(utils.Counter("version", "access"), []string{"product", "arch", "channel", "version"}),
+		MetricCacheMiss: promauto.NewCounterVec(utils.Counter("cache", "miss"), []string{"arch", "channel", "version"}),
+		MetricCacheHit:  promauto.NewCounterVec(utils.Counter("cache", "hit"), []string{"arch", "channel", "version"}),
+		CacheSize:       promauto.NewGaugeVec(utils.Gauge("cache", "size"), []string{"endpoint"}),
+		VersionAccessed: promauto.NewCounterVec(utils.Counter("version", "access"), []string{"arch", "channel", "version"}),
 		Healthcheck:     promauto.NewCounter(utils.Counter("healthcheck", "requests")),
 
-		UpstreamResponseTime: promauto.NewHistogramVec(utils.Histogram("upstream", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
-		ResponseTime:         promauto.NewHistogramVec(utils.Histogram("version", "response_time_ms"), []string{"product", "arch", "channel", "version"}),
+		UpstreamResponseTime: promauto.NewHistogramVec(utils.Histogram("upstream", "response_time_ms"), []string{"arch", "channel", "version"}),
+		ResponseTime:         promauto.NewHistogramVec(utils.Histogram("version", "response_time_ms"), []string{"endpoint"}),
 
-		ErrorResponses: promauto.NewCounterVec(utils.Counter("response", "errors"), []string{"code"}),
-		RefreshCounter: promauto.NewCounterVec(utils.Counter("version", "refreshed"), []string{"product", "arch", "channel", "version"}),
-		RefreshErrors:  promauto.NewCounterVec(utils.Counter("version", "refresh_errors"), []string{"product", "arch", "channel", "version"}),
+		ErrorResponses: promauto.NewCounterVec(utils.Counter("response", "errors"), []string{"path"}),
+		RefreshCounter: promauto.NewCounterVec(utils.Counter("version", "refreshed"), []string{"arch", "channel", "version"}),
+		RefreshErrors:  promauto.NewCounterVec(utils.Counter("version", "refresh_errors"), []string{"arch", "channel", "version"}),
 
 		Server: http.Server{
 			Handler: mux,

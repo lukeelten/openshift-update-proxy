@@ -12,10 +12,8 @@ import (
 )
 
 type OpenShiftVersionClient struct {
-	logger  *zap.SugaredLogger
-	config  *config.UpdateProxyConfig
-	product string
-
+	logger   *zap.SugaredLogger
+	config   *config.UpdateProxyConfig
 	cache    *OpenShiftVersionCache
 	upstream *UpstreamClient
 
@@ -47,6 +45,8 @@ func (client *OpenShiftVersionClient) CollectGarbage() {
 	if num > 0 {
 		client.logger.Infow("Deleted entries from cache", "entries", num)
 	}
+
+	client.metrics.CacheSize.WithLabelValues(client.upstream.Endpoint).Set(client.cache.Size())
 }
 
 func (client *OpenShiftVersionClient) RefreshEntries() {
@@ -56,25 +56,37 @@ func (client *OpenShiftVersionClient) RefreshEntries() {
 			client.logger.Debugw("start refresh entry", "entry", entry)
 
 			if client.loadFromUpstream(entry.Arch, entry.Channel, entry.Version) {
-				client.metrics.RefreshCounter.WithLabelValues(client.product, entry.Arch, entry.Channel, entry.Version).Inc()
+				client.metrics.RefreshCounter.WithLabelValues(entry.Arch, entry.Channel, entry.Version).Inc()
 			} else {
-				client.metrics.RefreshErrors.WithLabelValues(client.product, entry.Arch, entry.Channel, entry.Version).Inc()
+				client.metrics.RefreshErrors.WithLabelValues(entry.Arch, entry.Channel, entry.Version).Inc()
 				client.logger.Errorw("got error refreshing entry", "arch", entry.Arch, "channel", entry.Channel, "version", entry.Version)
 			}
 		}
 	})
+	client.metrics.CacheSize.WithLabelValues(client.upstream.Endpoint).Set(client.cache.Size())
 }
 
 func (client *OpenShiftVersionClient) Load(request *http.Request) ([]byte, error) {
+	client.logger.Debugw("got request", "request", request)
+
 	arch, channel, version := utils.ExtractQueryParams(request)
-	client.logger.Debugw("got request for versions", "arch", arch, "channel", channel, "version", version)
+	if len(arch) == 0 || len(channel) == 0 || len(version) == 0 {
+		client.logger.Errorw("cannot extract version information")
+		return []byte{}, errors.New("no channel information present. Invalid request")
+	}
+
+	client.metrics.VersionAccessed.WithLabelValues(arch, channel, version).Inc()
+	client.logger.Infow("got request for versions", "arch", arch, "channel", channel, "version", version)
 
 	if !client.cache.HasKey(arch, channel, version) {
+		client.metrics.MetricCacheMiss.WithLabelValues(arch, channel, version).Inc()
 		if !client.loadFromUpstream(arch, channel, version) {
 			client.logger.Errorw("cannot load version info from upstream")
 			client.logger.Debugw("error on request", "request", request)
 			return []byte{}, errors.New("no version info found")
 		}
+	} else {
+		client.metrics.MetricCacheHit.WithLabelValues(arch, channel, version).Inc()
 	}
 
 	return client.cache.Get(arch, channel, version)
@@ -92,5 +104,6 @@ func (client *OpenShiftVersionClient) loadFromUpstream(arch, channel, version st
 	}
 
 	client.cache.Set(arch, channel, version, versionBody)
+	client.metrics.CacheSize.WithLabelValues(client.upstream.Endpoint).Set(client.cache.Size())
 	return true
 }
